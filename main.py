@@ -3,11 +3,11 @@ import logging
 
 import requests
 
-from config import API_KEY, ITEMS_PURCHASE, DEBUG
+from config import *
 
 if DEBUG:
-    # logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.DEBUG)
-    logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.INFO)
+    logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.DEBUG)
+    # logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.INFO)
 else:
     logging.basicConfig(filename='app.log', filemode='a', format='%(asctime)s - %(levelname)s - %(message)s',
                         level=logging.INFO)
@@ -21,18 +21,42 @@ class CSGOMarketAPI:
         self.balance = -1
         self.request_counter = 0
 
-    def set_api_key(self, api_key: str):
+    def set_api_key(self, api_key: str) -> str:
+        """
+        Устанавливает ключ API для запросов
+
+        :param api_key: ключ API market.csgo.com
+        :return: API KEY
+        """
         self.API_KEY = api_key
+        return self.API_KEY
 
     def add_items_purchase(self, items: list):
-        self.ITEMS_PURCHASE += items
+        """
+        Добавляет предметы в список обновления автопокупки
 
-    async def refresh_request_counter_loop(self):
+        :param items: список новых предметов
+        :return: Обновленный список предметов
+        """
+        self.ITEMS_PURCHASE += items
+        return self.ITEMS_PURCHASE
+
+    async def refresh_request_counter_loop(self) -> None:
+        """
+        Loop для обновления счетчика запросов
+
+        :return: None
+        """
         while True:
             self.request_counter = 0
             await asyncio.sleep(1)
 
     def request_possibility(self) -> bool:
+        """
+        Проверяет возможность отправки запроса и обновляет счетчик
+
+        :return: bool
+        """
         if self.request_counter < self.MAX_REQUESTS:
             self.request_counter += 1
             return True
@@ -101,6 +125,11 @@ class CSGOMarketAPI:
         raise requests.HTTPError('Wrong response')
 
     async def get_orders(self) -> dict:
+        """
+        Получает список текущих ордеров на автопокупку
+
+        :return: dict
+        """
         while not self.request_possibility():
             await asyncio.sleep(0.3)
 
@@ -118,25 +147,41 @@ class CSGOMarketAPI:
         raise requests.HTTPError('Wrong response')
 
 
-async def main_loop(bot):
+async def main_loop(bot: CSGOMarketAPI) -> None:
+    """
+    Главный loop
+
+    :param bot: CSGOMarketAPI
+    :return: None
+    """
     exit_ = False
     if bot.balance < 0:
         await bot.get_money()
     logging.info(f'Баланс: {bot.balance}')
     while True:
-        await asyncio.sleep(5)
+        await asyncio.sleep(MAIN_LOOP_DELAY / 1000)
         if exit_:
             break
         orders = await bot.get_orders()
         orders = orders['Orders']
-        logging.debug('Orders:', orders)
+        logging.debug('-----orders-----')
+        logging.debug(orders)
+        logging.debug('----orders-END----')
         for item in ITEMS_PURCHASE:
-            matches = [
-                i for i in orders if i["i_classid"] == item['class_id'] and i['i_instanceid'] == item['instance_id']]
+            if type(orders) == str:
+                matches = False
+            else:
+                matches = [
+                    i for i in orders if
+                    str(i["i_classid"]) == item['class_id'] and str(i['i_instanceid']) == item['instance_id']]
             if not matches:
-                logging.info(f'Предмет "{item["market_name"]}" был куплен. Выставление нового лота.')
-                logging.info(f'Текущий баланс: {bot.balance} ₽')
-                await bot.insert_order(**item)
+                try:
+                    await bot.insert_order(**item)
+                    logging.info(f'Предмет "{item["market_name"]}" был куплен. Выставление нового лота.')
+                    logging.info(f'Текущий баланс: {bot.balance} ₽')
+                except requests.HTTPError as e:
+                    logging.warning('Something went wrong in main loop')
+                    pass
 
 
 async def main():

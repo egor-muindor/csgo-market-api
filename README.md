@@ -18,3 +18,5 @@ ITEMS_PURCHASE = [
 ```
 
 Текущие ордера и данные для составления списка можно получить с помощью запроса: `https://market.csgo.com/api/GetOrders/?key=[your_api_key]`
+
+Необходимо установить зависимости с помощью `pip install -r requirements.txt`.

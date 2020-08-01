@@ -1,4 +1,6 @@
 API_KEY = 'YOUR-API-KEY'
+DEBUG = True
+MAIN_LOOP_DELAY = 5000  # ms
 ITEMS_PURCHASE = [
     {
         'class_id': '3106076656',
@@ -7,4 +9,3 @@ ITEMS_PURCHASE = [
         'price': '500',
     },
 ]
-DEBUG = False
