@@ -7,10 +7,10 @@ from config import *
 
 if DEBUG:
     logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.DEBUG)
-    # logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.INFO)
 else:
-    logging.basicConfig(filename='app.log', filemode='a', format='%(asctime)s - %(levelname)s - %(message)s',
-                        level=logging.INFO)
+    logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.INFO)
+    # logging.basicConfig(filename='app.log', filemode='a', format='%(asctime)s - %(levelname)s - %(message)s',
+    #                     level=logging.INFO)
 
 
 class CSGOMarketAPI:
@@ -162,7 +162,11 @@ async def main_loop(bot: CSGOMarketAPI) -> None:
         await asyncio.sleep(MAIN_LOOP_DELAY / 1000)
         if exit_:
             break
-        orders = await bot.get_orders()
+        try:
+            orders = await bot.get_orders()
+        except requests.HTTPError as e:
+            logging.warning('Something going wrong. (get_orders())')
+            continue
         orders = orders['Orders']
         logging.debug('-----orders-----')
         logging.debug(orders)
