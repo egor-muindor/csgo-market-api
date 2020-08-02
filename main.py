@@ -51,6 +51,15 @@ class CSGOMarketAPI:
             self.request_counter = 0
             await asyncio.sleep(1)
 
+    def request_possibility_check(func):
+        async def magic(self):
+            while not self.request_possibility():
+                await asyncio.sleep(0.3)
+            print('magic?')
+            return await func(self)
+
+        return magic
+
     def request_possibility(self) -> bool:
         """
         Проверяет возможность отправки запроса и обновляет счетчик
@@ -63,15 +72,13 @@ class CSGOMarketAPI:
         else:
             return False
 
+    @request_possibility_check
     async def get_money(self) -> int:
         """
         Обновляет баланс аккаунта
 
         :return: Текущий баланс в копейках
         """
-        while not self.request_possibility():
-            await asyncio.sleep(0.3)
-
         logging.debug('get_money()')
         url = f'https://market.csgo.com/api/GetMoney/?key={API_KEY}'
         r = requests.get(url)
@@ -88,6 +95,7 @@ class CSGOMarketAPI:
         logging.error(r.text)
         raise requests.HTTPError('Wrong response')
 
+    @request_possibility_check
     async def insert_order(self, class_id: str, instance_id: str, price: str, hash='', **kwargs) -> bool:
         """
         Вставляет новый ордер на покупку предмета.
@@ -100,9 +108,6 @@ class CSGOMarketAPI:
 
         :return Результат выполнения
         """
-        while not self.request_possibility():
-            await asyncio.sleep(0.3)
-
         if await self.get_money() < int(price):
             logging.error('Недостаточно средств на балансе')
             raise AttributeError('Недостаточно средств на балансе')
@@ -124,15 +129,47 @@ class CSGOMarketAPI:
         logging.error(r.text)
         raise requests.HTTPError('Wrong response')
 
+    @request_possibility_check
+    async def update_order(self, class_id: str, instance_id: str, price: str) -> bool:
+        """
+        Изменить/удалить запрос на автоматическую покупку предмета.
+
+        :param class_id: ClassID предмета в Steam, можно найти в ссылке на предмет
+        :param instance_id: InstanceID предмета в Steam, можно найти в ссылке на предмет
+        :param price: Цена в копейках, целое число.
+        :return: Результат выполнения
+        """
+        url = f'https://market.csgo.com/api/UpdateOrder/{class_id}/{instance_id}/{price}/?key={API_KEY}'
+        r = requests.get(url)
+
+        if r.status_code == 200 and 'application/json' in r.headers['content-type']:
+            data = r.json()
+            if 'error' in data:
+                logging.error(data['error'])
+                raise requests.HTTPError(data['error'])
+            logging.debug(data)
+            if 'success' in data:
+                return True
+        logging.error(r.text)
+        raise requests.HTTPError('Wrong response')
+
+    async def delete_order(self, class_id: str, instance_id: str) -> bool:
+        """
+        Удалить запрос на автоматическую покупку предмета.
+
+        :param class_id: ClassID предмета в Steam, можно найти в ссылке на предмет
+        :param instance_id: InstanceID предмета в Steam, можно найти в ссылке на предмет
+        :return: Результат выполнения
+        """
+        return await self.update_order(class_id, instance_id, 0)
+
+    @request_possibility_check
     async def get_orders(self) -> dict:
         """
         Получает список текущих ордеров на автопокупку
 
         :return: dict
         """
-        while not self.request_possibility():
-            await asyncio.sleep(0.3)
-
         logging.debug('get_orders()')
         url = f'https://market.csgo.com/api/GetOrders/?key={self.API_KEY}'
         r = requests.get(url)
