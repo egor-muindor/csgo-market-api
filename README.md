@@ -9,10 +9,9 @@
 ```python
 ITEMS_PURCHASE = [
     {
-        'class_id': '3106076656', # class_id предмета
-        'instance_id': '0', # instance_id предмета
-        'price': '500', # Цена автозакупки в копейках
-        'market_name': 'Кейс «Запретная зона»', # Название предмета (только для логов)
+        'class_id': 3106076656, # class_id предмета
+        'instance_id': 0, # instance_id предмета
+        'price': 500, # Цена автозакупки в копейках
     },
 ]
 ```
