@@ -75,11 +75,7 @@ class CSGOMarketAPI:
         return self.API_KEY
 
     async def refresh_request_counter_loop(self) -> None:
-        """
-        Loop для обновления счетчика запросов
-
-        :return: None
-        """
+        """Loop для обновления счетчика запросов"""
         while True:
             self.request_counter = 0
             await asyncio.sleep(1)
@@ -103,7 +99,7 @@ class CSGOMarketAPI:
             else:
                 price = kwargs['price']
             if self.balance < price:
-                raise InsufficientFunds()
+                raise InsufficientFundsException()
             return func(self, *args, **kwargs)
 
         return magic
@@ -121,13 +117,43 @@ class CSGOMarketAPI:
             return False
 
     @request_possibility_check
-    def mass_info(self, items: MASS_INFO_LIST_TYPE) -> List[Item]:
-        """Возвращает список"""
-        logging.debug('get_money()')
-        SELL, BUY, HISTORY, INFO = 0, 0, 0, 2
-        url = f'https://market.csgo.com/api/MassInfo/{SELL}/{BUY}/{HISTORY}/{INFO}?key={self.API_KEY}'
-        formatted_body = [f'{i["class_id"]}_{i["instance_id"]}' for i in items]
-        r = requests.post(url, {'list': ','.join(formatted_body)})
+    def mass_info(self, items: MASS_INFO_LIST_TYPE, sell: int = 0, buy: int = 0,
+                  history: int = 0, info: int = 2) -> List[Item]:
+        """
+        Возвращает список предметов
+
+        :param items: list[dict{class_id: int, instance_id: int}]
+        :param sell: Possible values (0,1,2).
+            0 - Without any info |
+            1 - 50 cheapest + your own offers |
+            2 - Only 1 the cheapest offer
+        :param buy: Possible values (0,1,2)
+            0 - Without any info |
+            1 - 50 most expensive offers to buy |
+            2 - Only 1 the most expensive offer
+        :param history: Possible values (0,1,2)
+            0 - Without any info |
+            1 - Info about last 100 sales |
+            2 - Info about last 10 sales
+        :param info: Possible values (0,1,2,3)
+            0 - Without any info |
+            1 - Base information about item (name, type...) |
+            2 - Base info + hash, image URI
+            3 - All info (description, tags from steam)
+        :return: List of items with info
+        """
+        if sell not in (0, 1, 2):
+            raise AttributeError('`sell` value must be one of (0, 1, 2)')
+        if buy not in (0, 1, 2):
+            raise AttributeError('`buy` value must be one of (0, 1, 2)')
+        if history not in (0, 1, 2):
+            raise AttributeError('`history` value must be one of (0, 1, 2)')
+        if info not in (0, 1, 2, 3):
+            raise AttributeError('`info` value must be one of (0, 1, 2, 3)')
+        logging.debug('mass_info()')
+        url = f'https://market.csgo.com/api/MassInfo/{sell}/{buy}/{history}/{info}?key={self.API_KEY}'
+        formatted_body = ','.join([f'{i["class_id"]}_{i["instance_id"]}' for i in items])
+        r = requests.post(url, {'list': formatted_body})
         data = self.validate_response(r)
         if 'success' in data and data['success']:
             result = data['results']
@@ -223,11 +249,11 @@ class CSGOMarketAPI:
         :return: JSON like dict from response
         """
         if response.status_code != 200 and 'application/json' not in response.headers['content-type']:
-            raise WrongResponse(response)
+            raise WrongResponseException(response)
         body = response.json()
         if 'error' in body:
             if body['error'] == 'Bad KEY':
-                raise BadAPIKey()
+                raise BadAPIKeyException()
             raise UnknownError(body['error'])
 
         return body
@@ -238,12 +264,14 @@ class Error(Exception):
     pass
 
 
-class BadAPIKey(Error):
+class BadAPIKeyException(Error):
+    """Bad api key exception"""
+
     def __init__(self):
         logging.error('Bad API key used')
 
 
-class WrongResponse(Error):
+class WrongResponseException(Error):
     """Получен некорректный ответ от сервера"""
 
     def __init__(self, response: requests.Response):
@@ -267,6 +295,6 @@ class UnknownError(Error):
         self.response = text
 
 
-class InsufficientFunds(Error):
+class InsufficientFundsException(Error):
     """Недостаточно средств для совершения операции"""
     pass
