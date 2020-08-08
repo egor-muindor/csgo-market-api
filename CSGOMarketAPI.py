@@ -146,6 +146,15 @@ class CSGOMarketAPI:
         else:
             return False
 
+    @staticmethod
+    async def history():
+        """Список последних 50 покупок со всей торговой площадки."""
+
+        uri = 'https://market.csgo.com/history/json/'
+        response = requests.get(uri)
+        data = CSGOMarketAPI.validate_response(response)
+        return data
+
     @request_possibility_check
     async def get_itemdb_uri(self) -> Tuple[str, str]:
         """
@@ -160,6 +169,24 @@ class CSGOMarketAPI:
         if 'db' in data:
             return f'https://market.csgo.com/itemdb/{data["db"]}', str(data['time'])
         raise UnknownError(response.text)
+
+    @request_possibility_check
+    async def item_info(self, item: IMPORT_ITEM_TYPE, language: str = 'ru') -> Item:
+        """
+        Returns info and offers for current item.
+
+        :param item: item info: {class_id: int, instance_id: int}.
+        :param language: possible values: ru, en.
+        :return: filled class Item.
+        """
+        if language not in ('ru', 'en'):
+            raise AttributeError('`language` value must be one of (\'ru\', \'en\')')
+        uri = f'https://market.csgo.com/api/ItemInfo/{item["class_id"]}_{item["instance_id"]}/{language}/' \
+              f'?key={self.API_KEY}'
+        response = requests.get(uri)
+        data = self.validate_response(response)
+        # TODO написать в сохранение цен, стикеров и прочей информации в класс предмета
+        return Item.new_from_response_item_info(data)
 
     @request_possibility_check
     async def mass_info(self, items: MASS_INFO_LIST_TYPE, sell: int = 0, buy: int = 0,
@@ -206,8 +233,70 @@ class CSGOMarketAPI:
         data = self.validate_response(response)
         if 'success' in data and data['success']:
             result = data['results']
+            # TODO написать в сохранение цен, стикеров и прочей информации в класс предмета
             return [Item.new_from_mass_info(i) for i in result] + addiction_items
         raise UnknownError(response.text)
+
+    async def _request_offers(self, item: Item or IMPORT_ITEM_TYPE, method: str) -> dict:
+        """
+        :param item: filled Item or {class_id: int, instance_id: int}.
+        :param method: method name in uri like:
+         f'https://market.csgo.com/api/{method}/{item["class_id"]}_{item["instance_id"]}/?key={self.API_KEY}'.
+        :return: dict with info.
+        """
+        if isinstance(item, Item):
+            item = {'class_id': item.class_id, 'instance_id': item.instance_id}
+        uri = f'https://market.csgo.com/api/{method}/{item["class_id"]}_{item["instance_id"]}/?key={self.API_KEY}'
+        result, data = await self.request_with_boolean_response(uri)
+        if result:
+            return data
+        else:
+            return dict()
+
+    async def item_history(self, item: Item or IMPORT_ITEM_TYPE) -> dict:
+        """
+        Returns item history of changing price last 500 deals.
+
+        :param item: filled Item or {class_id: int, instance_id: int}.
+        :return: dict with info.
+        """
+        return await self._request_offers(item, 'ItemHistory')
+
+    async def sell_offers(self, item: Item or IMPORT_ITEM_TYPE) -> dict:
+        """
+        Returns sale offers of a specific item.
+
+        :param item: filled Item or {class_id: int, instance_id: int}.
+        :return: dict with info.
+        """
+        return await self._request_offers(item, 'SellOffers')
+
+    async def best_sell_offer(self, item: Item or IMPORT_ITEM_TYPE) -> dict:
+        """
+        Returns the best sale offer price.
+
+        :param item: filled Item or {class_id: int, instance_id: int}.
+        :return: dict with info.
+        """
+        return await self._request_offers(item, 'BestSellOffer')
+
+    async def buy_offers(self, item: Item or IMPORT_ITEM_TYPE) -> dict:
+        """
+        Returns buy offers of a specific item.
+
+        :param item: filled Item or {class_id: int, instance_id: int}.
+        :return: dict with info.
+        """
+        return await self._request_offers(item, 'BuyOffers')
+
+    async def best_buy_offer(self, item: Item or IMPORT_ITEM_TYPE) -> dict:
+        """
+        Returns the best buy offer price.
+
+        :param item: filled Item or {class_id: int, instance_id: int}.
+        :return: dict with info.
+        """
+        return await self._request_offers(item, 'BestBuyOffer')
 
     @request_possibility_check
     async def get_money(self) -> int:
