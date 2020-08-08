@@ -1,5 +1,7 @@
 import asyncio
+import contextlib
 import logging
+from asyncio import shield, CancelledError
 
 from CSGOMarketAPI import CSGOMarketAPI
 from config import *
@@ -21,45 +23,57 @@ async def main_loop(bot: CSGOMarketAPI) -> None:
     """
     exit_ = False
     if bot.balance < 0:
-        bot.get_money()
+        await bot.get_money()
     logging.info(f'Баланс: {bot.balance}')
     items_to_purchase = [{'item': item, 'price': _['price']} for item, _ in
-                         zip(bot.mass_info(ITEMS_PURCHASE), ITEMS_PURCHASE)]
+                         zip(await bot.mass_info(ITEMS_PURCHASE), ITEMS_PURCHASE)]
     while True:
         if exit_:
             break
-        orders = bot.get_orders()
-        orders = orders['Orders']
+        try:
+            await shield(asyncio.sleep(MAIN_LOOP_DELAY / 1000))
+        except CancelledError:
+            return
+        orders = await bot.get_orders()
         logging.debug('-----orders-----')
         logging.debug(orders)
         logging.debug('----orders-END----')
         for _ in items_to_purchase:
             item, price = _['item'], _['price']
-            if type(orders) == str:
-                matches = False
-            else:
-                matches = [
-                    i for i in orders if
-                    int(i["i_classid"]) == item.class_id and int(i['i_instanceid']) == item.instance_id]
+            matches = [
+                i for i in orders if
+                int(i["i_classid"]) == item.class_id and int(i['i_instanceid']) == item.instance_id]
             if not matches:
-                bot.insert_order(item, price)
+                await bot.insert_order(item, price)
                 logging.info(f'Предмет "{item.market_name}". Выставление нового лота.')
                 logging.info(f'Текущий баланс: {bot.balance / 100} ₽')
 
-        await asyncio.sleep(MAIN_LOOP_DELAY / 1000)
 
-
-async def main():
-    logging.info('Init')
+def main():
+    logging.info('----- Init -----')
     bot = CSGOMarketAPI(API_KEY)
-    t1 = asyncio.create_task(main_loop(bot))
-    t2 = asyncio.create_task(bot.refresh_request_counter_loop())
+    loop = asyncio.get_event_loop()
 
-    await t1
-    await t2
+    tasks = asyncio.gather(
+        bot.refresh_request_counter_loop(),
+        bot.stay_online_loop(),
+        main_loop(bot), return_exceptions=True
+    )
 
-    return
+    try:
+        return loop.run_until_complete(tasks)
+    except KeyboardInterrupt as e:
+        logging.info("Caught keyboard interrupt. Canceling tasks...")
+        tasks.add_done_callback(lambda t: loop.stop())
+        tasks.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            loop.run_until_complete(tasks)
+        loop.run_until_complete(loop.shutdown_asyncgens())
+        logging.info('Bay!')
+    finally:
+        loop.close()
+        exit()
 
 
 if __name__ == '__main__':
-    asyncio.run(main())
+    main()

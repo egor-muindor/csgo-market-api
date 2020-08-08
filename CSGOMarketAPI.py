@@ -1,7 +1,8 @@
 import asyncio
 import logging
 import time
-from typing import List, TypedDict
+from asyncio import CancelledError, shield
+from typing import List, TypedDict, Tuple
 
 import requests
 
@@ -66,32 +67,61 @@ class CSGOMarketAPI:
 
     def set_api_key(self, api_key: str) -> str:
         """
-        Устанавливает ключ API для запросов
+        Устанавливает ключ API для запросов.
 
-        :param api_key: ключ API market.csgo.com
+        :param api_key: ключ API market.csgo.com.
         :return: API KEY
         """
         self.API_KEY = api_key
         return self.API_KEY
 
     async def refresh_request_counter_loop(self) -> None:
-        """Loop для обновления счетчика запросов"""
+        """Loop для обновления счетчика запросов."""
+
         while True:
             self.request_counter = 0
-            await asyncio.sleep(1)
+            try:
+                await shield(asyncio.sleep(1))
+            except CancelledError:
+                return
+
+    async def stay_online_loop(self) -> None:
+        """Loop с отправкой ping_pong раз в 3 минуты"""
+        while True:
+            try:
+                await shield(self.ping_pong())
+                await shield(asyncio.sleep(3 * 60 - 5))
+            except BadGatewayError:
+                continue
+            except CancelledError:
+                while True:
+                    try:
+                        await self.go_offline()
+                    except BadGatewayError:
+                        continue
+                    finally:
+                        break
+                return
 
     def request_possibility_check(func):
-        """Декоратор проверки возможности отправить запрос"""
+        """Декоратор проверки возможности отправить запрос."""
 
-        def magic(self, *args, **kwargs):
-            while not self.request_possibility():
-                time.sleep(0.3)
-            return func(self, *args, **kwargs)
+        async def magic(self, *args, **kwargs):
+            if asyncio.iscoroutinefunction(func):
+                while not self.request_possibility():
+                    await asyncio.sleep(0.3)
+                return await func(self, *args, **kwargs)
+            else:
+                if not self.request_possibility():
+                    # это нужно, чтобы предотвратить зависание программы
+                    # есть вероятность блокировки api ключа из-за превышения лимита запросов
+                    time.sleep(1)
+                return func(self, *args, **kwargs)
 
         return magic
 
     def balance_check(func):
-        """Декоратор для проверки баланса"""
+        """Декоратор для проверки баланса."""
 
         def magic(self, *args, **kwargs):
             if 'price' not in kwargs:
@@ -106,7 +136,7 @@ class CSGOMarketAPI:
 
     def request_possibility(self) -> bool:
         """
-        Проверяет возможность отправки запроса и обновляет счетчик
+        Проверяет возможность отправки запроса, и обновляет счетчик.
 
         :return: bool
         """
@@ -117,10 +147,25 @@ class CSGOMarketAPI:
             return False
 
     @request_possibility_check
-    def mass_info(self, items: MASS_INFO_LIST_TYPE, sell: int = 0, buy: int = 0,
-                  history: int = 0, info: int = 2) -> List[Item]:
+    async def get_itemdb_uri(self) -> Tuple[str, str]:
         """
-        Возвращает список предметов
+        Gets latest URI of db all items.
+
+        :returns: (DB URI, time)
+        """
+        logging.debug('get_itemdb_uri()')
+        uri = f'https://market.csgo.com/itemdb/current_730.json'
+        response = requests.get(uri)
+        data = self.validate_response(response)
+        if 'db' in data:
+            return f'https://market.csgo.com/itemdb/{data["db"]}', str(data['time'])
+        raise UnknownError(response.text)
+
+    @request_possibility_check
+    async def mass_info(self, items: MASS_INFO_LIST_TYPE, sell: int = 0, buy: int = 0,
+                        history: int = 0, info: int = 2) -> List[Item]:
+        """
+        Возвращает список предметов.
 
         :param items: list[dict{class_id: int, instance_id: int}]
         :param sell: Possible values (0,1,2).
@@ -140,7 +185,7 @@ class CSGOMarketAPI:
             1 - Base information about item (name, type...) |
             2 - Base info + hash, image URI
             3 - All info (description, tags from steam)
-        :return: List of items with info
+        :return: List of items with info.
         """
         if sell not in (0, 1, 2):
             raise AttributeError('`sell` value must be one of (0, 1, 2)')
@@ -150,41 +195,44 @@ class CSGOMarketAPI:
             raise AttributeError('`history` value must be one of (0, 1, 2)')
         if info not in (0, 1, 2, 3):
             raise AttributeError('`info` value must be one of (0, 1, 2, 3)')
+        if len(items) > 100:
+            addiction_items = await self.mass_info(items[100:], sell, buy, history, info)
+        else:
+            addiction_items = []
         logging.debug('mass_info()')
         url = f'https://market.csgo.com/api/MassInfo/{sell}/{buy}/{history}/{info}?key={self.API_KEY}'
-        formatted_body = ','.join([f'{i["class_id"]}_{i["instance_id"]}' for i in items])
-        r = requests.post(url, {'list': formatted_body})
-        data = self.validate_response(r)
+        formatted_body = ','.join([f'{i["class_id"]}_{i["instance_id"]}' for i in items[:100]])
+        response = requests.post(url, {'list': formatted_body})
+        data = self.validate_response(response)
         if 'success' in data and data['success']:
             result = data['results']
-            return [Item.new_from_mass_info(i) for i in result]
-        raise UnknownError(r)
+            return [Item.new_from_mass_info(i) for i in result] + addiction_items
+        raise UnknownError(response.text)
 
     @request_possibility_check
-    def get_money(self) -> int:
+    async def get_money(self) -> int:
         """
-        Обновляет баланс аккаунта
+        Обновляет баланс аккаунта.
 
-        :return: Текущий баланс в копейках
+        :return: Текущий баланс в копейках.
         """
         logging.debug('get_money()')
         url = f'https://market.csgo.com/api/GetMoney/?key={self.API_KEY}'
-        r = requests.get(url)
-        data = self.validate_response(r)
+        response = requests.get(url)
+        data = self.validate_response(response)
         if 'money' in data:
             self.balance = int(data['money'])
             return int(data['money'])
-        raise UnknownError(r)
+        raise UnknownError(response)
 
-    @request_possibility_check
     @balance_check
-    def insert_order(self, item: Item, price: float) -> bool:
+    async def insert_order(self, item: Item, price: float) -> bool:
         """
         Вставляет новый ордер на покупку предмета.
 
         :param item: Экземпляр класса предмета.
-        :param price: цена предмета в копейках
-        :return: Результат выполнения
+        :param price: цена предмета в копейках.
+        :return: Результат выполнения.
         """
         logging.debug(f'insert_order(class_id=\'{item.class_id}\', '
                       f'instance_id=\'{item.instance_id}\', '
@@ -192,62 +240,96 @@ class CSGOMarketAPI:
                       f'hash=\'{item.hash}\')')
         url = f'https://market.csgo.com/api/InsertOrder/{item.class_id}/{item.instance_id}' \
               f'/{price}/{item.hash}/?key={self.API_KEY}'
-        r = requests.get(url)
-        data = self.validate_response(r)
-        if 'success' in data:
-            return data['success']
+        return (await self.request_with_boolean_response(url))[0]
 
-        return False
-
-    @request_possibility_check
     @balance_check
-    def update_order(self, item: Item, price: float) -> bool:
+    async def update_order(self, item: Item, price: float) -> bool:
         """
         Изменить/удалить запрос на автоматическую покупку предмета.
 
         :param item: Экземпляр класса предмета.
         :param price: Цена в копейках, целое число.
-        :return: Результат выполнения
+        :return: Результат выполнения.
         """
         url = f'https://market.csgo.com/api/UpdateOrder/{item.class_id}/{item.instance_id}/{price}/?key={self.API_KEY}'
-        r = requests.get(url)
-        data = self.validate_response(r)
-        if 'success' in data:
-            return data['success']
+        return (await self.request_with_boolean_response(url))[0]
 
-        return False
-
-    def delete_order(self, item: Item) -> bool:
+    async def delete_order(self, item: Item) -> bool:
         """
         Удалить запрос на автоматическую покупку предмета.
 
         :param item: Экземпляр класса предмета.
-        :return: Результат выполнения
+        :return: Результат выполнения.
         """
-        return self.update_order(item, 0)
+        return await self.update_order(item, 0)
 
-    @request_possibility_check
-    def get_orders(self) -> dict:
+    async def get_orders(self) -> dict:
         """
         Получает список текущих ордеров на автопокупку
 
-        :return: dict
+        :return: Возвращает словарь с ордерами.
         """
         logging.debug('get_orders()')
         url = f'https://market.csgo.com/api/GetOrders/?key={self.API_KEY}'
-        r = requests.get(url)
+        result, data = await self.request_with_boolean_response(url)
+        if type(data['Orders']) != str:
+            return data['Orders']
 
-        return self.validate_response(r)
+        return dict()
+
+    async def ping_pong(self) -> bool:
+        """
+        Выход в онлайн, необходимо отправлять раз в 3 минуты.
+
+        :return: Результат выполнения.
+        """
+        logging.debug('PING PONG')
+        url = f'https://market.csgo.com/api/PingPong/?key={self.API_KEY}'
+        return (await self.request_with_boolean_response(url))[0]
+
+    def sync_go_offline(self) -> bool:
+        """
+        Синхронно моментально приостановить торги.
+
+        :return: Результат выполнения.
+        """
+        logging.debug('Going offline (sync)')
+        url = f'https://market.csgo.com/api/GoOffline/?key={self.API_KEY}'
+        response = requests.get(url)
+        data = self.validate_response(response)
+        return data['success']
+
+    async def go_offline(self) -> bool:
+        """
+        Моментально приостановить торги.
+
+        :return: Результат выполнения.
+        """
+        logging.debug('Going offline')
+        url = f'https://market.csgo.com/api/GoOffline/?key={self.API_KEY}'
+        return (await self.request_with_boolean_response(url))[0]
+
+    @request_possibility_check
+    async def request_with_boolean_response(self, url: str) -> Tuple[bool, dict]:
+        """Метод для получения и обработки ответа с полем 'success'."""
+        response = requests.get(url)
+        data = self.validate_response(response)
+        if 'success' in data:
+            return data['success'], data
+
+        return False, data
 
     @staticmethod
     def validate_response(response: requests.Response) -> dict:
         """
-        Проверяет ответ на наличие ошибок
+        Проверяет ответ на наличие ошибок.
 
-        :param response: Received response
-        :raises BadAPIKey: Bad api key used
-        :return: JSON like dict from response
+        :param response: Received response.
+        :raises BadAPIKey: Bad api key used.
+        :return: JSON like dict from response.
         """
+        if response.status_code == 502:
+            raise BadGatewayError()
         if response.status_code != 200 and 'application/json' not in response.headers['content-type']:
             raise WrongResponseException(response)
         body = response.json()
@@ -265,18 +347,18 @@ class Error(Exception):
 
 
 class BadAPIKeyException(Error):
-    """Bad api key exception"""
+    """Bad api key exception."""
 
     def __init__(self):
         logging.error('Bad API key used')
 
 
 class WrongResponseException(Error):
-    """Получен некорректный ответ от сервера"""
+    """Получен некорректный ответ от сервера."""
 
     def __init__(self, response: requests.Response):
         """
-        :param response: Received response
+        :param response: Received response.
         """
         logging.error('Wrong response was received')
         logging.debug(response.text)
@@ -284,11 +366,11 @@ class WrongResponseException(Error):
 
 
 class UnknownError(Error):
-    """Произошла неизвестная ошибка"""
+    """Произошла неизвестная ошибка."""
 
     def __init__(self, text: str):
         """
-        :param text: Error text
+        :param text: Error text.
         """
         logging.error('Response contains unknown error')
         logging.debug(text)
@@ -296,5 +378,19 @@ class UnknownError(Error):
 
 
 class InsufficientFundsException(Error):
-    """Недостаточно средств для совершения операции"""
+    """Недостаточно средств для совершения операции."""
     pass
+
+
+class BadGatewayError(Error):
+    """Cloudflare 502 error | Server bad gateway error."""
+
+    def __init__(self, text: str = ''):
+        """
+        :param text: Error text
+        """
+        if text == '':
+            logging.error('Bad gateway error')
+        else:
+            logging.error(text)
+        self.response = text
