@@ -3,7 +3,7 @@ import contextlib
 import logging
 from asyncio import shield, CancelledError
 
-from CSGOMarketAPI import CSGOMarketAPI
+from MarketCSGO import CSGOMarketAPI
 from config import *
 
 if DEBUG:

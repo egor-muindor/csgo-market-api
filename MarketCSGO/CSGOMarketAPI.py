@@ -2,59 +2,18 @@ import asyncio
 import logging
 import time
 from asyncio import CancelledError, shield
-from typing import List, TypedDict, Tuple
+from typing import List, Tuple
 
 import requests
 
+from .Exceptions import *
+from .Item import *
+from .types import *
 
-class Item:
-    def __init__(self, class_id: int, instance_id: int, market_name: str, market_hash_name: str, hash: str,
-                 description: list = None, tags: list = None, our_market_instance_id: int = None):
-        self.class_id = class_id
-        self.instance_id = instance_id
-        self.market_name = market_name
-        self.market_hash_name = market_hash_name
-        self.hash = hash
-        self.description = description
-        self.tags = tags
-        self.our_market_instance_id = our_market_instance_id
-
-    @staticmethod
-    def new_from_response_item_info(response: dict):
-        item_data = {
-            'class_id': int(response['classid']),
-            'instance_id': int(response['instanceid']),
-            'market_name': response['market_name'],
-            'market_hash_name': response['market_hash_name'],
-            'description': response['description'],
-            'tags': response['tags'],
-            'our_market_instance_id':
-                response['our_market_instanceid'] if
-                response['our_market_instanceid'] != 'null' else None,
-            'hash': response['hash']
-        }
-
-        return Item(**item_data)
-
-    @staticmethod
-    def new_from_mass_info(response: dict):
-        item_data = {
-            'class_id': int(response['classid']),
-            'instance_id': int(response['instanceid']),
-            'market_name': response['info']['market_name'],
-            'market_hash_name': response['info']['market_hash_name'],
-            'our_market_instance_id':
-                response['info']['our_market_instanceid'] if
-                response['info']['our_market_instanceid'] != 'null' else None,
-            'hash': response['info']['hash']
-        }
-
-        return Item(**item_data)
+__all__ = ['CSGOMarketAPI']
 
 
 class CSGOMarketAPI:
-    IMPORT_ITEM_TYPE = TypedDict('IMPORT_ITEM_TYPE', class_id=int, instance_id=int)
-    MASS_INFO_LIST_TYPE = List[IMPORT_ITEM_TYPE]
 
     def __init__(self, api_key: str) -> None:
         """
@@ -171,7 +130,7 @@ class CSGOMarketAPI:
         raise UnknownError(response.text)
 
     @request_possibility_check
-    async def item_info(self, item: IMPORT_ITEM_TYPE, language: str = 'ru') -> Item:
+    async def item_info(self, item: ImportItemType, language: str = 'ru') -> Item:
         """
         Returns info and offers for current item.
 
@@ -189,7 +148,7 @@ class CSGOMarketAPI:
         return Item.new_from_response_item_info(data)
 
     @request_possibility_check
-    async def mass_info(self, items: MASS_INFO_LIST_TYPE, sell: int = 0, buy: int = 0,
+    async def mass_info(self, items: MassInfoListType, sell: int = 0, buy: int = 0,
                         history: int = 0, info: int = 2) -> List[Item]:
         """
         Возвращает список предметов.
@@ -237,7 +196,7 @@ class CSGOMarketAPI:
             return [Item.new_from_mass_info(i) for i in result] + addiction_items
         raise UnknownError(response.text)
 
-    async def _request_offers(self, item: Item or IMPORT_ITEM_TYPE, method: str) -> dict:
+    async def _request_offers(self, item: Item or ImportItemType, method: str) -> dict:
         """
         :param item: filled Item or {class_id: int, instance_id: int}.
         :param method: method name in uri like:
@@ -253,7 +212,7 @@ class CSGOMarketAPI:
         else:
             return dict()
 
-    async def item_history(self, item: Item or IMPORT_ITEM_TYPE) -> dict:
+    async def item_history(self, item: Item or ImportItemType) -> dict:
         """
         Returns item history of changing price last 500 deals.
 
@@ -262,7 +221,7 @@ class CSGOMarketAPI:
         """
         return await self._request_offers(item, 'ItemHistory')
 
-    async def sell_offers(self, item: Item or IMPORT_ITEM_TYPE) -> dict:
+    async def sell_offers(self, item: Item or ImportItemType) -> dict:
         """
         Returns sale offers of a specific item.
 
@@ -271,7 +230,7 @@ class CSGOMarketAPI:
         """
         return await self._request_offers(item, 'SellOffers')
 
-    async def best_sell_offer(self, item: Item or IMPORT_ITEM_TYPE) -> dict:
+    async def best_sell_offer(self, item: Item or ImportItemType) -> dict:
         """
         Returns the best sale offer price.
 
@@ -280,7 +239,7 @@ class CSGOMarketAPI:
         """
         return await self._request_offers(item, 'BestSellOffer')
 
-    async def buy_offers(self, item: Item or IMPORT_ITEM_TYPE) -> dict:
+    async def buy_offers(self, item: Item or ImportItemType) -> dict:
         """
         Returns buy offers of a specific item.
 
@@ -289,7 +248,7 @@ class CSGOMarketAPI:
         """
         return await self._request_offers(item, 'BuyOffers')
 
-    async def best_buy_offer(self, item: Item or IMPORT_ITEM_TYPE) -> dict:
+    async def best_buy_offer(self, item: Item or ImportItemType) -> dict:
         """
         Returns the best buy offer price.
 
@@ -428,58 +387,3 @@ class CSGOMarketAPI:
             raise UnknownError(body['error'])
 
         return body
-
-
-class Error(Exception):
-    """Base class for exceptions in this module."""
-    pass
-
-
-class BadAPIKeyException(Error):
-    """Bad api key exception."""
-
-    def __init__(self):
-        logging.error('Bad API key used')
-
-
-class WrongResponseException(Error):
-    """Получен некорректный ответ от сервера."""
-
-    def __init__(self, response: requests.Response):
-        """
-        :param response: Received response.
-        """
-        logging.error('Wrong response was received')
-        logging.debug(response.text)
-        self.response = response
-
-
-class UnknownError(Error):
-    """Произошла неизвестная ошибка."""
-
-    def __init__(self, text: str):
-        """
-        :param text: Error text.
-        """
-        logging.error('Response contains unknown error')
-        logging.debug(text)
-        self.response = text
-
-
-class InsufficientFundsException(Error):
-    """Недостаточно средств для совершения операции."""
-    pass
-
-
-class BadGatewayError(Error):
-    """Cloudflare 502 error | Server bad gateway error."""
-
-    def __init__(self, text: str = ''):
-        """
-        :param text: Error text
-        """
-        if text == '':
-            logging.error('Bad gateway error')
-        else:
-            logging.error(text)
-        self.response = text
